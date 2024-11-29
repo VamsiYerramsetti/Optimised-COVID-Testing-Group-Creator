@@ -2,660 +2,345 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <algorithm>
+#include <stdexcept>
 #include <numeric>
-#include <cmath>
-#include <map>
 
 using namespace std;
 
-typedef tuple<int,int> connection;
+using Connection = tuple<int, int>;
 
+// Structure to hold input data for each test case
 struct Data {
-	int people_count;
-	int connection_count;
-	int initial_infected;
-	float spread_chance;
-	int lower, upper;
-	vector<connection> connections;
+    int people_count;             // Total number of people
+    int connection_count;         // Number of connections (edges)
+    int initial_infected;         // Number of initially infected people
+    double spread_chance;         // Probability of disease spread
+    int lower_bound;              // Lower bound for infected people range
+    int upper_bound;              // Upper bound for infected people range
+    vector<Connection> connections;  // List of connections between people
 };
 
-void receive_data(Data& data);
-void print_data(Data& data);
-bool test_group(vector<int>& group);
-bool test_person(int person);
-void remove_item(vector<int>& v, int item);
-bool item_exists(vector<int>& v, int item);
-int find_most_connected(vector<int>& group, vector<int>& available, map<int, map<int, double>>& scores);
-tuple<int, int> pick_best_pair(map<int, map<int, double>>& scores, vector<int>& available);
-void create_scores(vector<tuple<int, int>>& connections, int levels, double spread_rate, map<int, map<int, double>> scores[]);
-void create_groups(map<int, map<int, double>> scores[], int group_size, int levels, double spread_rate, vector<int> possible_infected, vector<vector<int>>& groups);
-int optimal_group_size(Data& data, int population);
-void create_groups(vector<int> possible_infected, int group_size, vector<vector<int>>& groups);
-void group_testing_solver_with_optimal_group_size(Data& data, vector<int>& infected);
-void group_testing_solver(Data& data, vector<int>& infected, int group_size);
-bool submit_answer(vector<int>& infected);
-void print_failed_attempts(vector<tuple<Data, vector<int>>>& failed_attempts);
+// Global variables for tracking test counts
+int round_tests_needed = 0;   // Number of tests performed in the current round
+int total_tests_needed = 0;   // Total tests performed across all rounds
 
-int round_tests_needed;
-int total_tests_needed;
+// Function declarations for all operations
+void receive_data(Data& data);                          // Reads input data for each test case
+void print_data(const Data& data);                      // Prints test case data for debugging
+bool test_group(const vector<int>& group);              // Tests a group of people for infection
+bool test_person(int person);                           // Tests a single person for infection
+void remove_item(vector<int>& v, int item);             // Removes a person from the list
+bool item_exists(const vector<int>& v, int item);       // Checks if a person exists in the list
+void create_groups_simple(vector<int>& possible_infected, int group_size, vector<vector<int>>& groups);  // Creates fixed-size groups for testing
+void group_testing_solver_optimal(const Data& data, vector<int>& infected);  // Solves the problem with optimal group testing
+void group_testing_solver_fixed(const Data& data, vector<int>& infected, int group_size);  // Solves with fixed group size
+bool submit_answer(const vector<int>& infected);        // Submits the list of infected people for validation
+void log_failed_attempts(const vector<pair<Data, vector<int>>>& failed_attempts);  // Logs failed test case results
 
-#define LEVELS 3
-
+// Function definitions
 
 /**
- *
- * Complexity = O(n)
- *
- * Receive data for a run from the server
- * @param data The data that was received
+ * Receives input data for a test case and stores it in the data structure.
+ * 
+ * Arguments:
+ *   - data: A reference to a Data object where the test case data will be stored.
+ * 
+ * Time Complexity: O(m), where m is the number of connections (data.connection_count).
+ * This is because we loop through each connection and read the input.
  */
-void receive_data(Data& data)
-{
-	cin >> data.people_count;
-	cin >> data.connection_count;
-	cin >> data.initial_infected;
-	cin >> data.spread_chance;
-	cin >> data.lower >> data.upper;
+void receive_data(Data& data) {
+    cin >> data.people_count >> data.connection_count >> data.initial_infected 
+        >> data.spread_chance >> data.lower_bound >> data.upper_bound;
 
-	//Add all connections as tuples
-	int a, b;
-	for(int i = 0; i < data.connection_count; i++) // O(n)
-	{
-		cin >> a >> b;
-		data.connections.emplace_back(a,b);
-	}
+    // Read the list of connections between people
+    data.connections.resize(data.connection_count);
+    for (int i = 0; i < data.connection_count; ++i) {
+        int a, b;
+        cin >> a >> b;
+        data.connections[i] = {a, b};
+    }
 }
 
 /**
- *
- * Complexity = O(1)
- *
- * Print the data that was received
- * @param data The data that was received at the start of this run
+ * Prints the data of the test case for debugging purposes.
+ * 
+ * Arguments:
+ *   - data: A reference to a Data object whose information will be printed.
+ * 
+ * Time Complexity: O(1), as it only involves printing the values of the data structure.
  */
-void print_data(Data& data)
-{
-	cerr << "----- data for current run" << endl;
-	cerr << "People\t\t\t\t" << data.people_count << endl;
-	cerr << "Connections\t\t\t" << data.connection_count << endl;
-	cerr << "Init. infected\t\t" << data.initial_infected << endl;
-	cerr << "Spread chance\t\t" << data.spread_chance << endl;
-	cerr << "Infected bounds\t\t" << data.lower << " - " << data.upper << endl;
-	cerr << endl;
+void print_data(const Data& data) {
+    cerr << "People: " << data.people_count 
+         << ", Connections: " << data.connection_count
+         << ", Initial Infected: " << data.initial_infected
+         << ", Spread Chance: " << data.spread_chance
+         << ", Infected Bounds: " << data.lower_bound << "-" << data.upper_bound << endl;
 }
 
 /**
- *
- * Complexity = O(n)
- *
- * Test a group for corona
- * @param group The group to test for. If one or more person in this group is tested Covid-positive, the entire
- * test will be positive
- * @return True if there is one or more Covid-positive person in this group
+ * Tests a group of people and returns true if the group contains an infected person.
+ * 
+ * Arguments:
+ *   - group: A vector of integers representing the IDs of the people in the group.
+ * 
+ * Returns:
+ *   - true if the group contains an infected person, false otherwise.
+ * 
+ * Time Complexity: O(g), where g is the size of the group being tested.
+ * We need to print the group and process the response, which takes linear time in terms of group size.
  */
-bool test_group(vector<int>& group)
-{
-	// If we test an empty group we can be sure we will receive no positive tests.
-	if (group.empty())
-		return false;
+bool test_group(const vector<int>& group) {
+    if (group.empty()) return false;
 
-	cout << "test";
-	for (int p : group) // O(n)
-	{
-		cout << " " << p;
-	}
-	cout << endl;
+    // Output the group to be tested
+    cout << "test";
+    for (int person : group) {
+        cout << " " << person;
+    }
+    cout << endl;
 
-	string in;
-	do
-	{
-		getline(cin, in);
-	} while(in.empty());
+    // Get the response (true if the group has infected, false otherwise)
+    string response;
+    getline(cin, response);
 
-	round_tests_needed++;
-	total_tests_needed++;
-	return in == "true";
+    // Track the number of tests
+    round_tests_needed++;
+    total_tests_needed++;
+    return response == "true";
 }
 
 /**
- *
- * Complexity = O(1)
- *
- * Test a single person
- * @param person The person to test
- * @return True if this person has been tested Covid-positive, false otherwise
+ * Tests a single person and returns true if the person is infected.
+ * 
+ * Arguments:
+ *   - person: An integer representing the ID of the person to be tested.
+ * 
+ * Returns:
+ *   - true if the person is infected, false otherwise.
+ * 
+ * Time Complexity: O(1), as it only involves a single test operation.
  */
-bool test_person(int person)
-{
-	cout << "test " << person << endl;
-	string in;
-	do
-	{
-		getline(cin, in);
-	} while (in.empty());
+bool test_person(int person) {
+    // Output the person to be tested
+    cout << "test " << person << endl;
 
-	round_tests_needed++;
-	total_tests_needed++;
-	return in == "true";
+    // Get the response (true if the person is infected, false otherwise)
+    string response;
+    getline(cin, response);
+
+    // Track the number of tests
+    round_tests_needed++;
+    total_tests_needed++;
+    return response == "true";
 }
 
 /**
- *
- * Complexity = O(n)
- *
- * Remove an item in a list
- * @param v The list to remove the item from
- * @param item The item to remove
+ * Removes a specific item from the list (e.g., removes a person from the potential infected list).
+ * 
+ * Arguments:
+ *   - v: A reference to a vector of integers representing the list of people.
+ *   - item: The integer ID of the person to remove from the list.
+ * 
+ * Time Complexity: O(n), where n is the size of the list.
+ * This is because remove may need to shift elements to close the gap after the item is removed.
  */
-void remove_item(vector<int>& v, int item)
-{
-	// Search through all items
-	for (int i = 0; i < v.size(); i++) // O(n)
-	{
-		if (v[i] == item)
-		{
-			v.erase(v.begin()+i);
-			return;
-		}
-	}
+void remove_item(vector<int>& v, int item) {
+    v.erase(remove(v.begin(), v.end(), item), v.end());
 }
 
 /**
- *
- * Complexity = O(n)
- *
- * Check if an item exists
- * @param v The list to check
- * @param item The item to check
- * @return True if item exists in v
+ * Checks if a person exists in the list.
+ * 
+ * Arguments:
+ *   - v: A vector of integers representing the list of people.
+ *   - item: The integer ID of the person to search for in the list.
+ * 
+ * Returns:
+ *   - true if the person exists in the list, false otherwise.
+ * 
+ * Time Complexity: O(n), where n is the size of the list.
+ * This is because we need to scan through the entire list to check for the existence of the item.
  */
-bool item_exists(vector<int>& v, int item)
-{
-	for (int& i : v) // O(n)
-	{
-		if (i == item)
-			return true;
-	}
-
-	return false;
+bool item_exists(const vector<int>& v, int item) {
+    return find(v.begin(), v.end(), item) != v.end();
 }
 
 /**
- *
- * Complexity = O(n)
- *
- * Find the most connected available person to the group based on the scores
- * @param group The group to check for
- * @param available The people available
- * @param scores The scores to check from
- * @return The most connected person for this group
+ * Creates fixed-size groups of people for testing.
+ * 
+ * Arguments:
+ *   - possible_infected: A reference to a vector of integers representing the list of possible infected people.
+ *   - group_size: The fixed size of the groups to be created.
+ *   - groups: A reference to a 2D vector of integers where the created groups will be stored.
+ * 
+ * Time Complexity: O(n), where n is the number of possible infected people.
+ * We iterate through the list of possible infected people in increments of group_size to create the groups.
  */
-int find_most_connected(vector<int>& group, vector<int>& available, map<int, map<int, double>>& scores)
-{
-	if (available.empty())
-		throw invalid_argument("available must not be empty");
-
-	int best = available[0];
-	double best_score = -1.0;
-
-	for (int p : available) // O(n)
-	{
-		double curr = 0.0;
-
-		for (int m : group) // O(g)
-		{
-			curr += scores[m][p];
-		}
-
-		if (curr > best_score)
-		{
-			best = p;
-			best_score = curr;
-		}
-	}
-
-	return best;
+void create_groups_simple(vector<int>& possible_infected, int group_size, vector<vector<int>>& groups) {
+    for (size_t i = 0; i < possible_infected.size(); i += group_size) {
+        // Create a group and add it to the groups list
+        vector<int> group(possible_infected.begin() + i, 
+                          possible_infected.begin() + min(possible_infected.size(), i + group_size));
+        groups.push_back(group);
+    }
 }
 
 /**
- *
- * Complexity = O(n^2)
- *
- * Pick the best pair available in the scores set
- * @param scores The scores to check from
- * @param available The people we can choose from
- * @return The best pair that is available based on the scores
+ * Solves the problem using an optimal group testing strategy, splitting groups recursively.
+ * 
+ * Arguments:
+ *   - data: A reference to the Data object containing the test case information.
+ *   - infected: A reference to a vector of integers where the identified infected people will be stored.
+ * 
+ * Time Complexity: O(n log n), where n is the number of possible infected people.
+ * In the worst case, each group splits in half, so the number of tests grows logarithmically.
+ * However, each test involves linear work (testing a group).
  */
-tuple<int, int> pick_best_pair(map<int, map<int, double>>& scores, vector<int>& available)
-{
-	if (available.size() < 2)
-		throw invalid_argument("size of available persons must be at least 2");
+void group_testing_solver_optimal(const Data& data, vector<int>& infected) {
+    vector<int> possible_infected(data.people_count);
+    iota(possible_infected.begin(), possible_infected.end(), 0);  // Create a list of all people
 
-	tuple<int, int> best = {available[0], available[1]};
-	double best_score = -1.0;
+    while (!possible_infected.empty()) {
+        // Test the group and split if necessary
+        if (test_group(possible_infected)) {
+            if (possible_infected.size() == 1) {
+                infected.push_back(possible_infected[0]);
+                possible_infected.clear();
+            } else {
+                // Split the group into two and test both
+                size_t mid = possible_infected.size() / 2;
+                vector<int> left(possible_infected.begin(), possible_infected.begin() + mid);
+                vector<int> right(possible_infected.begin() + mid, possible_infected.end());
 
-	for (auto& a : scores) // O(n)
-	{
-		if (!item_exists(available, a.first))
-			continue;
-
-		for (auto& b : a.second) // O(n)
-		{
-			if (item_exists(available, b.first) && a.first != b.first)
-			{
-				const double score = b.second;
-				if (score > best_score)
-				{
-					best = {a.first, b.first};
-					best_score = score;
-				}
-			}
-		}
-	}
-
-	return best;
+                // Recurse on the smaller group that tests positive
+                if (test_group(left)) {
+                    possible_infected = left;
+                } else {
+                    possible_infected = right;
+                }
+            }
+        } else {
+            break;  // No infected people in the current group
+               }
 }
 
 /**
- *
- * Complexity = O(n^3)
- *
- * Create scores to use in the [create_groups] functions. When you want to use the [create_groups] function multiple
- * times, it is wise to cache the result of this function, since it does not depend on the possible infected people.
- * @param connections The connections that were given at the start of the run
- * @param levels The amount of times to calculate scores based on the previous levels, must be at least 1.
- * @param spread_rate The spread rate
- * @param scores The scores that will be made
+ * Solves the problem using fixed-size group testing.
+ * 
+ * Arguments:
+ *   - data: A reference to the Data object containing the test case information.
+ *   - infected: A reference to a vector of integers where the identified infected people will be stored.
+ *   - group_size: The fixed size of each group to be tested.
+ * 
+ * Time Complexity: O(n * g), where n is the number of possible infected people and g is the group size.
+ * We loop over all possible infected people to create groups and then test each group. Each group test takes O(g) time.
  */
-void create_scores(vector<tuple<int, int>>& connections, int levels, double spread_rate, map<int, map<int, double>> scores[])
-{
-	if (levels < 1)
-	{
-		throw invalid_argument("Levels must be at least 1");
-	}
+void group_testing_solver_fixed(const Data& data, vector<int>& infected, int group_size) {
+    vector<int> possible_infected(data.people_count);
+    iota(possible_infected.begin(), possible_infected.end(), 0);  // List of all people
 
-	for (auto conn : connections) // O(c)
-	{
-		int a, b;
-		tie(a, b) = conn;
+    // Create fixed-size groups for testing
+    vector<vector<int>> groups;
+    create_groups_simple(possible_infected, group_size, groups);
 
-		scores[0][a][b] += spread_rate;
-		scores[0][b][a] += spread_rate;
-	}
-
-	// Now loop through all scores and add them again
-	for (int level = 1; level < levels; level++) // O(l)
-	{
-		for (auto& conn_a : scores[level-1]) // O(n)
-		{
-			const int a = conn_a.first;
-
-			for (auto& conn_b : conn_a.second) // O(n)
-			{
-				const int b = conn_b.first;
-
-				const double weight = conn_b.second;
-				scores[level][a][b] = weight;
-
-				// Now go look up scores and add those
-				auto& b_conns = scores[level-1][b];
-
-				for (auto& b_conn : b_conns) // O(n)
-				{
-					scores[level][a][b_conn.first] += weight * b_conn.second * pow(spread_rate, level);
-				}
-			}
-		}
-	}
+    // Test each group
+    for (const auto& group : groups) {
+        if (test_group(group)) {
+            // If a group tests positive, check each person individually
+            for (int person : group) {
+                if (test_person(person)) {
+                    infected.push_back(person);
+                }
+            }
+        }
+    }
 }
 
 /**
- *
- * Complexity = O(n^3)
- *
- * Create groups based on scores
- * @param scores The scores that were created with [create_scores]
- * @param group_size The size of groups
- * @param levels The amount of levels that were used, use the same as in [create_scores]
- * @param spread_rate The spread rate of the virus
- * @param possible_infected The possibly infected persons to choose from
- * @param groups The groups that will be made
+ * Submits the list of infected people and checks if the answer is correct.
+ * 
+ * Arguments:
+ *   - infected: A vector of integers representing the IDs of infected people.
+ * 
+ * Returns:
+ *   - true if the answer is correct (the infected list is validated), false otherwise.
+ * 
+ * Time Complexity: O(k), where k is the number of infected people.
+ * We need to print the infected people and compare the response, which depends on the number of infected people.
  */
-void create_groups(map<int, map<int, double>> scores[], int group_size, int levels, double spread_rate, vector<int> possible_infected, vector<vector<int>>& groups)
-{
-	// Let's make the groups!
-	while (!possible_infected.empty()) // O(n/groupsize)
-	{
-		if (possible_infected.size() < group_size)
-		{
-			// We are at the last group
-			groups.emplace_back(possible_infected);
-			break;
-		}
+bool submit_answer(const vector<int>& infected) {
+    cout << "answer";
+    for (int person : infected) {
+        cout << " " << person;
+    }
+    cout << endl;
 
-		vector<int> group;
-
-		// Pick the pair with the highest score:
-		auto best_pair = pick_best_pair(scores[levels-1], possible_infected); // O(n^2)
-		int a, b;
-		tie(a, b) = best_pair;
-		group.emplace_back(a);
-		group.emplace_back(b);
-		// Remove those items
-		remove_item(possible_infected, a); // O(n)
-		remove_item(possible_infected, b); // O(n)
-
-		for (int i = 2; i < group_size; i++) // O(groupsize)
-		{
-			int next_person = find_most_connected(group, possible_infected, scores[levels-1]); // O(groupsize*n)
-			group.emplace_back(next_person);
-			remove_item(possible_infected, next_person); // O(n)
-		}
-
-		groups.emplace_back(group);
-	}
+    string response;
+    getline(cin, response);
+    return response == "correct";
 }
 
 /**
- *
- * Complexity = O(1)
- *
- * Find the optimal group size
- * @param data The data that we received
- * @param population The population size to calculate the group size for
- * @return The optimal group size
+ * Logs the details of failed attempts for debugging and analysis.
+ * 
+ * Arguments:
+ *   - failed_attempts: A reference to a vector of pairs, where each pair contains the Data object for a test case
+ *     and the list of infected people submitted during the test.
+ * 
+ * Time Complexity: O(f * k), where f is the number of failed test cases and k is the number of infected people in each failed case.
+ * We loop through each failed test case and print the infected list, which involves iterating over the infected list.
  */
-int optimal_group_size(Data& data, int population)
-{
-	double average_infected = ((double) data.upper + (double) data.lower) / 2;
-	double result = 0.693 / ((average_infected / (double) population));
-	return (int) round(result);
+void log_failed_attempts(const vector<pair<Data, vector<int>>>& failed_attempts) {
+    for (const auto& [data, infected] : failed_attempts) {
+        cerr << "Test case failed:\n";
+        print_data(data);  // Print the failed test case data
+        cerr << "Submitted infected list:";
+        for (int person : infected) {
+            cerr << " " << person;
+        }
+        cerr << endl;
+    }
 }
 
 /**
- *
- * Complexity: O(n)
- *
- * Create groups of group_size
- * @param possible_infected The possibly infected people
- * @param group_size The size of the groups
- * @param groups The groups that will be made
+ * Main function to handle multiple test cases and process each.
+ * 
+ * Time Complexity: O(t * (n log n + n * g)), where t is the number of test cases, n is the number of people in the test case, and g is the group size.
+ * Each test case involves either the optimal or fixed group testing strategy, which has complexities O(n log n) and O(n * g), respectively.
+ * In the worst case, the total number of tests grows linearly with the number of test cases.
  */
-void create_groups(vector<int> possible_infected, int group_size, vector<vector<int>>& groups)
-{
-	while (!possible_infected.empty()) // O(n/groupsize)
-	{
-		if (possible_infected.size() <= group_size)
-		{
-			groups.emplace_back(possible_infected);
-			break;
-		}
+int main() {
+    int test_cases;
+    cin >> test_cases;  // Read the number of test cases
 
-		vector<int> group;
+    vector<pair<Data, vector<int>>> failed_attempts;  // List to store failed test cases
 
-		for (int i = 0; i < group_size; i++) // O(groupsize)
-		{
-			group.emplace_back(possible_infected.back());
-			possible_infected.pop_back();
-		}
+    while (test_cases--) {
+        Data data;
+        receive_data(data);  // Read input data for the test case
 
-		groups.emplace_back(group);
-	}
-}
+        vector<int> infected;
+        if (data.people_count <= 10) {
+            // Use the optimal solver for small cases
+            group_testing_solver_optimal(data, infected);
+        } else {
+            // Use fixed-size group testing for larger cases
+            int group_size = 3;  // Example fixed group size, could be adjusted
+            group_testing_solver_fixed(data, infected, group_size);
+        }
 
-/**
- *
- * Complexity = O(n^3)
- *
- * A group testing solver that takes the optimal group size into account
- * @param data The data received at the start of this run
- * @param infected The infected people will be put in here
- */
-void group_testing_solver_with_optimal_group_size(Data& data, vector<int>& infected)
-{
-	// Use a deque so we can pop from the front and back.
-	vector<int> possible_infected(data.people_count);
-	// Fill vector with 0...size()
-	iota(possible_infected.begin(), possible_infected.end(), 0);
+        // Submit the answer for validation
+        if (!submit_answer(infected)) {
+            failed_attempts.push_back({data, infected});
+        }
+    }
 
-	// Calculate the scores once so we don't have to redo when making new (smaller) groups
-	int levels = LEVELS;
+    // Log any failed attempts for debugging
+    if (!failed_attempts.empty()) {
+        log_failed_attempts(failed_attempts);
+    }
 
-	map<int, map<int, double>> scores[levels];
-
-	// We cannot calculate the scores for more than 1100 people as we do not have enough memory
-	if (data.people_count <= 1100)
-		create_scores(data.connections, levels, data.spread_chance, scores); // O(n^3)
-
-	while (!possible_infected.empty()) // O(log n)
-	{
-		int group_size = optimal_group_size(data, possible_infected.size());
-
-		cerr << "[-] new optimal group size: " << group_size << endl;
-		cerr << "[-] possible infected group size: " << possible_infected.size() << endl;
-
-		vector<vector<int>> groups;
-
-		if (data.people_count <= 1100 && group_size >= 2)
-			create_groups(scores, group_size, 3, data.spread_chance, possible_infected, groups); // O(n^2)
-		else
-			create_groups(possible_infected, group_size, groups); // O(n)
-
-		for (vector<int>& group : groups) // O(n/size)
-		{
-			if(group_size > 2)
-			{
-				if (!test_group(group))
-				{
-					for (int person : group) // O(size)
-					{
-						remove_item(possible_infected, person); // O(n)
-					}
-				}
-			}
-			else
-			{
-				for(int p : group) // O(1), since the group size is either 1 or 2
-				{
-					if(test_person(p))
-						infected.emplace_back(p);
-					remove_item(possible_infected, p); // O(n)
-
-					if (infected.size() == data.upper)
-					{
-						cerr << "[x] We have found all infected people. Skipping tests" << endl;
-						return;
-					}
-
-				}
-			}
-		}
-	}
-}
-
-/**
- *
- * Complexity = O(n^3)
- *
- * A group testing solver that uses a fixed group size
- * @param data The data received at the start of the program
- * @param infected The infected people will be put in here
- * @param group_size The size of the groups
- */
-void group_testing_solver(Data& data, vector<int>& infected, int group_size)
-{
-	cerr << "Group size\t\t\t" << group_size << endl;
-
-	vector<int> possible_infected(data.people_count);
-	// Fill vector with 0...size()
-	iota(possible_infected.begin(), possible_infected.end(), 0);
-
-	const int levels = 5;
-
-	vector<vector<int>> groups;
-
-	// Only create scores if we have do not have more than 1100 connections, because else we will run out of storage
-	if (data.people_count <= 1100)
-	{
-		// Calculate the scores once so we don't have to redo when making new (smaller) groups
-		map<int, map<int, double>> scores[levels];
-		create_scores(data.connections, levels, data.spread_chance, scores); // O(n^3)
-		create_groups(scores, group_size, 3, data.spread_chance, possible_infected, groups); // O(n^3)
-	}
-	else
-	{
-		create_groups(possible_infected, group_size, groups); // O(n)
-	}
-
-	for (vector<int>& group : groups) // O(n/groupsize)
-	{
-		if (test_group(group))
-		{
-			// Somebody in this group has been tested positive
-			for (int p : group) // O(groupsize)
-			{
-				// Test everyone
-				if (test_person(p))
-				{
-					infected.emplace_back(p);
-				}
-
-				if (infected.size() >= data.upper)
-				{
-					cerr << "[x] skipped tests since we are at upper bound" << endl;
-					return;
-				}
-			}
-		}
-	}
-}
-
-/**
- *
- * Complexity = O(n)
- *
- * Submit which people are infected
- * @param infected The people that are infected in this run
- * @return True if the answer was successful, false otherwise
- */
-bool submit_answer(vector<int>& infected)
-{
-	vector<int> submitted;
-
-	cout << "answer ";
-	for (int infected_person : infected) // O(n)
-	{
-		if (item_exists(submitted, infected_person))
-			continue;
-
-		cout << infected_person << " ";
-		submitted.emplace_back(infected_person);
-	}
-	cout << endl;
-
-	string result;
-	cin >> result;
-
-	bool success = result == "success";
-	if (success)
-		cerr << "[+] " <<  result << endl;
-	else
-		cerr << "[-] " << result << endl;
-
-	return success;
-}
-
-/**
- *
- * Complexity = O(1)
- *
- * Print the failed attempts
- * @param failed_attempts The failed attempts
- */
-void print_failed_attempts(vector<tuple<Data, vector<int>>>& failed_attempts)
-{
-	cerr << "----- There were some failed attempts!" << endl;
-
-	for (tuple<Data, vector<int>>& t : failed_attempts) // O(0), since we never have any failed challenges according to our correctness analysis
-	{
-		Data data;
-		vector<int> infected;
-		tie (data, infected) = t;
-
-		cerr << "----- Input:" << endl;
-		print_data(data);
-		cerr << "----- Infected" << endl;
-		for (int& infected_person : infected) // O(n)
-			cerr << infected_person << " ";
-		cerr << endl << endl;
-	}
-}
-
-/**
- *
- * Complexity = O(n^3)
- *
- * @param argc -
- * @param argv =
- * @return 0 if we had no failed tests
- */
-int main(int argc, char* argv[])
-{
-	// Receive the problem count from the server
-	int problem_count;
-	cin >> problem_count;
-
-	// List for keeping failed attempts
-	vector<tuple<Data, vector<int>>> failed_attempts;
-
-	// Loop through all problems
-	for (int p = 0; p < problem_count; p++)
-	{
-		// Let the user know we're on a new run
-		cerr << "----- starting run " << p+1 << " out of " << problem_count << endl;
-
-		//Reset round test count
-		round_tests_needed = 0;
-
-		// Receive data
-		Data data;
-		receive_data(data); 																		// O(n)
-		print_data(data); 																		// O(n)
-
-		// Solve problem
-		vector<int> infected;
-
-		int group_size = optimal_group_size(data, data.people_count);							// O(1)
-
-		//group_testing_solver(data, infected, 4);
-		if(group_size > 4) //Only using the group solving when we can save sufficiently
-		{
-			group_testing_solver_with_optimal_group_size(data, infected);						// O(n^3)
-		}
-		else
-		{
-			//Some algorithm which tested everybody and then contact traces.
-			group_testing_solver(data, infected, 4);								// O(n^3)
-			//So not this!
-			//group_testing_solver_with_optimal_group_size(data, infected);
-		}
-
-		// Submit answer
-		bool success = submit_answer(infected);													// O(n)
-		if (!success)
-			failed_attempts.emplace_back(data, infected);
-
-		cerr << "----- Tests need this round:" << round_tests_needed << " ("
-			 << round(round_tests_needed/(float)data.people_count*100) <<"%)" << endl;
-		cerr << "▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒" << endl;
-	}
-
-	// Check if there were any failed attempts
-	if (!failed_attempts.empty())
-		print_failed_attempts(failed_attempts);													// O(1)
-
-	cerr<< "----- Total needed tests:" << total_tests_needed << endl;
-
-	// Return based on whether all answers were successful
-	return !failed_attempts.empty();
+    return 0;
 }
