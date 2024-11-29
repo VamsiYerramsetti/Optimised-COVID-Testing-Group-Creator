@@ -1,4 +1,4 @@
-# Optimized COVID-19 Testing Group Creator: Project Overview  
+# Optimized COVID-19 Testing Group Creator:
 
 This project focuses on efficient group-based COVID-19 testing using algorithmic optimization techniques to minimize testing costs while ensuring accurate detection. By analyzing social connection networks, it strategically groups individuals for testing, significantly reducing the number of tests needed.  
 
